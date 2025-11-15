@@ -1,19 +1,20 @@
 {
-    "type": "package",
-    "name": "ericgj/elm-uri-template",
-    "summary": "Inject values from a Dict into a URI template",
-    "license": "MIT",
-    "version": "1.0.1",
-    "exposed-modules": [
-        "Url.Interpolate"
-    ],
-    "elm-version": "0.19.0 <= v < 0.20.0",
-    "dependencies": {
-        "elm/core": "1.0.0 <= v < 2.0.0",
-        "elm/regex": "1.0.0 <= v < 2.0.0",
-        "rtfeldman/elm-hex": "1.0.0 <= v < 2.0.0"
-    },
-    "test-dependencies": {
-        "elm-explorations/test": "1.0.0 <= v < 2.0.0"
-    }
+  "type": "package",
+  "name": "ericgj/elm-uri-template",
+  "summary": "Inject values from a Dict into a URI template",
+  "license": "MIT",
+  "version": "1.0.1",
+  "exposed-modules": [
+    "Url.Interpolate"
+  ],
+  "elm-version": "0.19.0 <= v < 0.20.0",
+  "dependencies": {
+    "elm/core": "1.0.0 <= v < 2.0.0",
+    "elm/regex": "1.0.0 <= v < 2.0.0",
+    "rtfeldman/elm-hex": "1.0.0 <= v < 2.0.0"
+  },
+  "test-dependencies": {
+    "elm/json": "1.1.4 <= v < 2.0.0",
+    "elm-explorations/test": "2.0.0 <= v < 3.0.0"
+  }
 }

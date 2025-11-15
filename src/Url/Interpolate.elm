@@ -1,4 +1,7 @@
-module Url.Interpolate exposing (interpolate)
+module Url.Interpolate exposing
+    ( interpolate
+    , Context, Value(..), simpleContext
+    )
 
 {-| Url.Interpolate provides a single function, `interpolate`, which takes
 a URI Template string and a Dict of variables, and expands
@@ -18,6 +21,21 @@ import Regex exposing (Match, Regex)
 import Set exposing (Set)
 
 
+type alias Context =
+    Dict String Value
+
+
+type Value
+    = Scalar String
+    | Multi (List String)
+    | Assoc (Dict String String)
+
+
+simpleContext : List ( String, String ) -> Context
+simpleContext pairs =
+    List.map (Tuple.mapSecond Scalar) pairs |> Dict.fromList
+
+
 {-| Example URI template interpolation:
 
     interpolate "<http://example.com/{path}{?x,y,empty}"> <|
@@ -32,7 +50,7 @@ instance, '!' _is_ escaped for the template operations that use the
 escape it. Thus, we rely on the `Hex` library rather than `Url.percentEncode`.
 
 -}
-interpolate : String -> Dict String String -> String
+interpolate : String -> Context -> String
 interpolate string args =
     Regex.replace interpolationRegex (applyInterpolation args) string
 
@@ -44,7 +62,7 @@ interpolationRegex =
         |> Maybe.withDefault Regex.never
 
 
-applyInterpolation : Dict String String -> Match -> String
+applyInterpolation : Context -> Match -> String
 applyInterpolation replacements { match, submatches } =
     submatches
         |> getTemplateParts
@@ -65,7 +83,7 @@ getTemplateParts submatches =
             Nothing
 
 
-expand : String -> List String -> Dict String String -> String
+expand : String -> List String -> Context -> String
 expand operator vars replacements =
     case operator of
         "" ->
@@ -96,108 +114,127 @@ expand operator vars replacements =
             ""
 
 
-expandSimple : List String -> Dict String String -> String
-expandSimple =
-    expandUnreservedStringSeparatedBy ","
+expandSimple : List String -> Context -> String
+expandSimple vars replacements =
+    unpackContext vars replacements
+        |> expandUnreservedStringSeparatedBy ","
 
 
-expandReservedString : List String -> Dict String String -> String
-expandReservedString =
-    expandReservedStringSeparatedBy ","
+expandReservedString : List String -> Context -> String
+expandReservedString vars replacements =
+    unpackContext vars replacements
+        |> expandReservedStringSeparatedBy ","
 
 
-expandFragment : List String -> Dict String String -> String
+expandFragment : List String -> Context -> String
 expandFragment vars replacements =
-    "#" ++ expandReservedStringSeparatedBy "," vars replacements
-
-
-expandLabel : List String -> Dict String String -> String
-expandLabel vars replacements =
-    "." ++ expandUnreservedStringSeparatedBy "." vars replacements
-
-
-expandPath : List String -> Dict String String -> String
-expandPath vars replacements =
-    "/" ++ expandUnreservedStringSeparatedBy "/" vars replacements
-
-
-expandPathParam : List String -> Dict String String -> String
-expandPathParam vars replacements =
-    vars
-        |> List.map
-            (\var ->
-                Dict.get var replacements
-                    |> Maybe.withDefault ""
-                    |> (\val -> ( var, percentEncodeWithUnreserved val ))
-            )
-        |> (\pairs ->
-                ";"
-                    ++ (pairs
-                            |> List.map
-                                (\( var, val ) ->
-                                    if String.isEmpty val then
-                                        var
-
-                                    else
-                                        var ++ "=" ++ val
-                                )
-                            |> String.join ";"
-                       )
+    "#"
+        ++ (unpackContext vars replacements
+                |> expandReservedStringSeparatedBy ","
            )
 
 
-expandQuery : List String -> Dict String String -> String
-expandQuery =
-    expandQueryHelp "?"
+expandLabel : List String -> Context -> String
+expandLabel vars replacements =
+    "."
+        ++ (unpackContext vars replacements
+                |> expandUnreservedStringSeparatedBy "."
+           )
 
 
-expandQueryContinuation : List String -> Dict String String -> String
-expandQueryContinuation =
-    expandQueryHelp "&"
+expandPath : List String -> Context -> String
+expandPath vars replacements =
+    "/"
+        ++ (unpackContext vars replacements
+                |> expandUnreservedStringSeparatedBy "/"
+           )
+
+
+expandPathParam : List String -> Context -> String
+expandPathParam vars replacements =
+    unpackContext vars replacements
+        |> expandPathParamHelp
+
+
+expandQuery : List String -> Context -> String
+expandQuery vars replacements =
+    unpackContext vars replacements
+        |> expandQueryHelp "?"
+
+
+expandQueryContinuation : List String -> Context -> String
+expandQueryContinuation vars replacements =
+    unpackContext vars replacements
+        |> expandQueryHelp "&"
+
+
+unpackContext : List String -> Dict String Value -> List ( String, String )
+unpackContext vars context =
+    let
+        addUnpacked var l =
+            case Dict.get var context of
+                Just (Scalar s) ->
+                    ( var, s ) :: l
+
+                Just (Multi ss) ->
+                    List.map (\s -> ( var, s )) ss ++ l
+
+                Just (Assoc d) ->
+                    Dict.toList d ++ l
+
+                Nothing ->
+                    ( var, "" ) :: l
+    in
+    List.foldr addUnpacked [] vars
 
 
 
 -- HELPERS
 
 
-expandQueryHelp : String -> List String -> Dict String String -> String
-expandQueryHelp prefix vars replacements =
-    vars
-        |> List.map
-            (\var ->
-                Dict.get var replacements
-                    |> Maybe.withDefault ""
-                    |> (\val -> ( var, percentEncodeWithUnreserved val ))
-            )
-        |> (\pairs ->
-                prefix
-                    ++ (pairs
-                            |> List.map (\( var, val ) -> var ++ "=" ++ val)
-                            |> String.join "&"
-                       )
+expandPathParamHelp : List ( String, String ) -> String
+expandPathParamHelp pairs =
+    ";"
+        ++ (pairs
+                |> List.map (Tuple.mapSecond percentEncodeWithUnreserved)
+                |> List.map
+                    (\( var, val ) ->
+                        if String.isEmpty val then
+                            var
+
+                        else
+                            var ++ "=" ++ val
+                    )
+                |> String.join ";"
            )
 
 
-expandUnreservedStringSeparatedBy : String -> List String -> Dict String String -> String
-expandUnreservedStringSeparatedBy sep vars replacements =
-    vars
+expandQueryHelp : String -> List ( String, String ) -> String
+expandQueryHelp prefix pairs =
+    prefix
+        ++ (pairs
+                |> List.map (Tuple.mapSecond percentEncodeWithUnreserved)
+                |> List.map (\( var, val ) -> var ++ "=" ++ val)
+                |> String.join "&"
+           )
+
+
+expandUnreservedStringSeparatedBy : String -> List ( String, String ) -> String
+expandUnreservedStringSeparatedBy sep pairs =
+    pairs
         |> List.map
-            (\var ->
-                Dict.get var replacements
-                    |> Maybe.map percentEncodeWithUnreserved
-                    |> Maybe.withDefault ""
+            (Tuple.second
+                >> percentEncodeWithUnreserved
             )
         |> String.join sep
 
 
-expandReservedStringSeparatedBy : String -> List String -> Dict String String -> String
-expandReservedStringSeparatedBy sep vars replacements =
-    vars
+expandReservedStringSeparatedBy : String -> List ( String, String ) -> String
+expandReservedStringSeparatedBy sep pairs =
+    pairs
         |> List.map
-            (\var ->
-                Dict.get var replacements
-                    |> Maybe.map percentEncodeWithReserved
-                    |> Maybe.withDefault ""
+            (Tuple.second
+                >> percentEncodeWithReserved
             )
         |> String.join sep
 
