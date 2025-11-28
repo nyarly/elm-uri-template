@@ -31,6 +31,14 @@ type Value
     | Assoc (Dict String String)
 
 
+type Modifier
+    = NoMod
+    | Explode
+    | Prefix Int
+
+
+{-| Works like Dict.fromList to produce a context of names to Scalar string values
+-}
 simpleContext : List ( String, String ) -> Context
 simpleContext pairs =
     List.map (Tuple.mapSecond Scalar) pairs |> Dict.fromList
@@ -39,7 +47,7 @@ simpleContext pairs =
 {-| Example URI template interpolation:
 
     interpolate "<http://example.com/{path}{?x,y,empty}"> <|
-    Dict.fromList [("path", "hello"), ("x", "1024"), ("y", "768")]
+    simpleContext [("path", "hello"), ("x", "1024"), ("y", "768")]
 
     -- "<http://example.com/hello?x=1024&y=768&empty=">
 
@@ -57,7 +65,14 @@ interpolate string args =
 
 interpolationRegex : Regex
 interpolationRegex =
-    "\\{([+#.\\/;?&]{0,1})([A-Za-z0-9_,%]+)\\}"
+    "\\{([+#.\\/;?&]?)([A-Za-z0-9_,%:*0-9]+)\\}"
+        |> Regex.fromString
+        |> Maybe.withDefault Regex.never
+
+
+modifiersRegex : Regex
+modifiersRegex =
+    "([A-Za-z0-9_%]+)(:([0-9]+)|[*])?(,?)"
         |> Regex.fromString
         |> Maybe.withDefault Regex.never
 
@@ -70,20 +85,40 @@ applyInterpolation replacements { match, submatches } =
         |> Maybe.withDefault match
 
 
-getTemplateParts : List (Maybe String) -> Maybe ( String, List String )
+getTemplateParts : List (Maybe String) -> Maybe ( String, List ( String, Modifier ) )
 getTemplateParts submatches =
     case submatches of
         [ Just operator, Just expression ] ->
-            Just ( operator, String.split "," expression )
+            Just ( operator, splitVars expression )
 
         [ Nothing, Just expression ] ->
-            Just ( "", String.split "," expression )
+            Just ( "", splitVars expression )
 
         _ ->
             Nothing
 
 
-expand : String -> List String -> Context -> String
+splitVars : String -> List ( String, Modifier )
+splitVars string =
+    Regex.find modifiersRegex string
+        |> List.filterMap
+            (\{ submatches } ->
+                case submatches of
+                    [ Just varname, Just "*", _, _ ] ->
+                        Just ( varname, Explode )
+
+                    [ Just varname, Just _, Just prefix, _ ] ->
+                        Just ( varname, Prefix (String.toInt prefix |> Maybe.withDefault 0) )
+
+                    [ Just varname, Nothing, _, _ ] ->
+                        Just ( varname, NoMod )
+
+                    _ ->
+                        Nothing
+            )
+
+
+expand : String -> List ( String, Modifier ) -> Context -> String
 expand operator vars replacements =
     case operator of
         "" ->
@@ -114,78 +149,92 @@ expand operator vars replacements =
             ""
 
 
-expandSimple : List String -> Context -> String
+expandSimple : List ( String, Modifier ) -> Context -> String
 expandSimple vars replacements =
-    unpackContext vars replacements
-        |> expandUnreservedStringSeparatedBy ","
+    unpackContext percentEncodeValue vars replacements
+        |> separatedBy ","
 
 
-expandReservedString : List String -> Context -> String
+expandReservedString : List ( String, Modifier ) -> Context -> String
 expandReservedString vars replacements =
-    unpackContext vars replacements
-        |> expandReservedStringSeparatedBy ","
+    unpackContext percentEncodeValue vars replacements
+        |> separatedBy ","
 
 
-expandFragment : List String -> Context -> String
+expandFragment : List ( String, Modifier ) -> Context -> String
 expandFragment vars replacements =
     "#"
-        ++ (unpackContext vars replacements
-                |> expandReservedStringSeparatedBy ","
+        ++ (unpackContext percentEncodeValueReserved vars replacements
+                |> separatedBy ","
            )
 
 
-expandLabel : List String -> Context -> String
+expandLabel : List ( String, Modifier ) -> Context -> String
 expandLabel vars replacements =
     "."
-        ++ (unpackContext vars replacements
-                |> expandUnreservedStringSeparatedBy "."
+        ++ (unpackContext percentEncodeValue vars replacements
+                |> separatedBy "."
            )
 
 
-expandPath : List String -> Context -> String
+expandPath : List ( String, Modifier ) -> Context -> String
 expandPath vars replacements =
     "/"
-        ++ (unpackContext vars replacements
-                |> expandUnreservedStringSeparatedBy "/"
+        ++ (unpackContext percentEncodeValue vars replacements
+                |> separatedBy "/"
            )
 
 
-expandPathParam : List String -> Context -> String
+expandPathParam : List ( String, Modifier ) -> Context -> String
 expandPathParam vars replacements =
-    unpackContext vars replacements
+    unpackContext percentEncodeValue vars replacements
         |> expandPathParamHelp
 
 
-expandQuery : List String -> Context -> String
+expandQuery : List ( String, Modifier ) -> Context -> String
 expandQuery vars replacements =
-    unpackContext vars replacements
+    unpackContext percentEncodeValue vars replacements
         |> expandQueryHelp "?"
 
 
-expandQueryContinuation : List String -> Context -> String
+expandQueryContinuation : List ( String, Modifier ) -> Context -> String
 expandQueryContinuation vars replacements =
-    unpackContext vars replacements
+    unpackContext percentEncodeValue vars replacements
         |> expandQueryHelp "&"
 
 
-unpackContext : List String -> Dict String Value -> List ( String, String )
-unpackContext vars context =
+addUnpacked : Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
+addUnpacked context ( var, mod ) l =
+    case ( mod, Dict.get var context ) of
+        ( Prefix pre, Just (Scalar s) ) ->
+            ( var, String.left pre s ) :: l
+
+        ( _, Just (Scalar s) ) ->
+            ( var, s ) :: l
+
+        ( Explode, Just (Multi ss) ) ->
+            List.map (\s -> ( var, s )) ss ++ l
+
+        ( _, Just (Multi ss) ) ->
+            ( var, String.join "," ss ) :: l
+
+        ( Explode, Just (Assoc d) ) ->
+            Dict.toList d ++ l
+
+        ( _, Just (Assoc d) ) ->
+            List.map (\( k, v ) -> ( var, String.join "=" [ k, v ] )) (Dict.toList d) ++ l
+
+        ( _, Nothing ) ->
+            ( var, "" ) :: l
+
+
+unpackContext : (Value -> Value) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
+unpackContext encoding vars context =
     let
-        addUnpacked var l =
-            case Dict.get var context of
-                Just (Scalar s) ->
-                    ( var, s ) :: l
-
-                Just (Multi ss) ->
-                    List.map (\s -> ( var, s )) ss ++ l
-
-                Just (Assoc d) ->
-                    Dict.toList d ++ l
-
-                Nothing ->
-                    ( var, "" ) :: l
+        encode _ =
+            encoding
     in
-    List.foldr addUnpacked [] vars
+    List.foldr (addUnpacked (Debug.log "context" (Dict.map encode context))) [] (Debug.log "vars" vars)
 
 
 
@@ -196,7 +245,6 @@ expandPathParamHelp : List ( String, String ) -> String
 expandPathParamHelp pairs =
     ";"
         ++ (pairs
-                |> List.map (Tuple.mapSecond percentEncodeWithUnreserved)
                 |> List.map
                     (\( var, val ) ->
                         if String.isEmpty val then
@@ -213,29 +261,16 @@ expandQueryHelp : String -> List ( String, String ) -> String
 expandQueryHelp prefix pairs =
     prefix
         ++ (pairs
-                |> List.map (Tuple.mapSecond percentEncodeWithUnreserved)
                 |> List.map (\( var, val ) -> var ++ "=" ++ val)
                 |> String.join "&"
            )
 
 
-expandUnreservedStringSeparatedBy : String -> List ( String, String ) -> String
-expandUnreservedStringSeparatedBy sep pairs =
+separatedBy : String -> List ( String, String ) -> String
+separatedBy sep pairs =
     pairs
         |> List.map
-            (Tuple.second
-                >> percentEncodeWithUnreserved
-            )
-        |> String.join sep
-
-
-expandReservedStringSeparatedBy : String -> List ( String, String ) -> String
-expandReservedStringSeparatedBy sep pairs =
-    pairs
-        |> List.map
-            (Tuple.second
-                >> percentEncodeWithReserved
-            )
+            Tuple.second
         |> String.join sep
 
 
@@ -320,14 +355,36 @@ reservedChars =
         [ ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' ]
 
 
-percentEncodeWithUnreserved : String -> String
-percentEncodeWithUnreserved =
-    percentEncodeExcept unreservedChars
+percentEncodeValue : Value -> Value
+percentEncodeValue =
+    percentEncodeValueExcept unreservedChars
 
 
-percentEncodeWithReserved : String -> String
-percentEncodeWithReserved =
-    percentEncodeExcept (Set.union unreservedChars reservedChars)
+percentEncodeValueReserved : Value -> Value
+percentEncodeValueReserved =
+    percentEncodeValueExcept reservedAndUnreserved
+
+
+percentEncodeValueExcept : Set Char -> Value -> Value
+percentEncodeValueExcept chars val =
+    case val of
+        Scalar s ->
+            Scalar (percentEncodeExcept chars s)
+
+        Multi l ->
+            Multi (List.map (percentEncodeExcept chars) l)
+
+        Assoc d ->
+            let
+                encode _ =
+                    percentEncodeExcept chars
+            in
+            Assoc (Dict.map encode d)
+
+
+reservedAndUnreserved : Set Char
+reservedAndUnreserved =
+    Set.union unreservedChars reservedChars
 
 
 percentEncodeExcept : Set Char -> String -> String
