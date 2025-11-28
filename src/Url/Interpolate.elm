@@ -157,7 +157,7 @@ expandSimple vars replacements =
 
 expandReservedString : List ( String, Modifier ) -> Context -> String
 expandReservedString vars replacements =
-    unpackContext percentEncodeValue vars replacements
+    unpackContext percentEncodeValueReserved vars replacements
         |> separatedBy ","
 
 
