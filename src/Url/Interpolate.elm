@@ -1,14 +1,23 @@
 module Url.Interpolate exposing
     ( interpolate
-    , Context, Value(..), simpleContext
+    , simpleContext
+    , addScalar
+    , addList
+    , addAssoc
+    , Context
     )
 
-{-| Url.Interpolate provides a single function, `interpolate`, which takes
-a URI Template string and a Dict of variables, and expands
+{-| Url.Interpolate provides a primary entrypoint function, `interpolate`, which takes
+a URI Template string and a variable, and expands
 the input string according to the rules in IETF RFC 6570,
-up to Level 3 (Level 4 compliance is not provided or planned).
+up to Level 4.
 
 @docs interpolate
+
+@docs simpleContext
+@docs addScalar
+@docs addList
+@docs addAssoc
 
 [rfc6570]: https://tools.ietf.org/html/rfc6570
 
@@ -21,6 +30,8 @@ import Regex exposing (Match, Regex)
 import Set exposing (Set)
 
 
+{-| the Context for a template interpolation
+-}
 type alias Context =
     Dict String Value
 
@@ -37,11 +48,36 @@ type Modifier
     | Prefix Int
 
 
-{-| Works like Dict.fromList to produce a context of names to Scalar string values
+{-| Works like Dict.fromList to produce a context of names to Scalar string values;
+you could also use this to create an empty context like
+
+    simpleContext []
+
 -}
 simpleContext : List ( String, String ) -> Context
 simpleContext pairs =
     List.map (Tuple.mapSecond Scalar) pairs |> Dict.fromList
+
+
+{-| add a scalar (in other words a simple string) value to the context
+-}
+addScalar : Context -> String -> String -> Context
+addScalar context key scalar =
+    Dict.insert key (Scalar scalar) context
+
+
+{-| add a list of strings to the context
+-}
+addList : Context -> String -> List String -> Context
+addList context key list =
+    Dict.insert key (Multi list) context
+
+
+{-| add an associated list (in other words a map) to a context
+-}
+addAssoc : Context -> String -> Dict String String -> Context
+addAssoc context key assoc =
+    Dict.insert key (Assoc assoc) context
 
 
 {-| Example URI template interpolation:
@@ -51,13 +87,21 @@ simpleContext pairs =
 
     -- "<http://example.com/hello?x=1024&y=768&empty=">
 
-Internal note: I was surprised to find that the baseline %-encode rules for URI
-templates are _slightly different_ than the built-in `encodeURIComponent`. For
-instance, '!' _is_ escaped for the template operations that use the
-"unrestricted set" of unescaped characters, while the built-in does _not_
-escape it. Thus, we rely on the `Hex` library rather than `Url.percentEncode`.
+-}
+
+
+
+{-
+
+   Internal note: I was surprised to find that the baseline %-encode rules for URI
+   templates are _slightly different_ than the built-in `encodeURIComponent`. For
+   instance, '!' _is_ escaped for the template operations that use the
+   "unrestricted set" of unescaped characters, while the built-in does _not_
+   escape it. Thus, we rely on the `Hex` library rather than `Url.percentEncode`.
 
 -}
+
+
 interpolate : String -> Context -> String
 interpolate string args =
     Regex.replace interpolationRegex (applyInterpolation args) string

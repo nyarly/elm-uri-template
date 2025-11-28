@@ -1,9 +1,10 @@
 module Tests exposing (..)
 
+import Dict exposing (Dict)
 import Expect exposing (Expectation)
 import Json.Decode as D exposing (Decoder, int, string)
 import Test exposing (..)
-import Url.Interpolate exposing (Context, Value(..), interpolate)
+import Url.Interpolate exposing (Context, addAssoc, addList, addScalar, interpolate, simpleContext)
 
 
 type alias Cases =
@@ -80,14 +81,47 @@ examplesDecoder =
         )
 
 
+type TestValue
+    = Scalar String
+    | Multi (List String)
+    | Assoc (Dict String String)
+
+
 contextDecoder : Decoder Context
 contextDecoder =
-    D.dict
-        (D.oneOf
-            [ D.map Scalar string
-            , D.map Multi (D.list string)
-            , D.map Assoc (D.dict string)
-            ]
+    let
+        remapValues : Dict String TestValue -> Context
+        remapValues d =
+            List.foldl
+                (\k ->
+                    \a ->
+                        case Dict.get k d of
+                            Just (Scalar s) ->
+                                addScalar a k s
+
+                            Just (Multi l) ->
+                                addList a k l
+
+                            Just (Assoc c) ->
+                                addAssoc a k c
+
+                            Nothing ->
+                                addScalar a k "wtfbbq"
+                )
+                (simpleContext
+                    []
+                )
+                (Dict.keys d)
+    in
+    D.map
+        remapValues
+        (D.dict
+            (D.oneOf
+                [ D.map Scalar string
+                , D.map Multi (D.list string)
+                , D.map Assoc (D.dict string)
+                ]
+            )
         )
 
 
