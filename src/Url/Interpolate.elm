@@ -1,10 +1,10 @@
 module Url.Interpolate exposing
     ( interpolate
+    , Context
     , simpleContext
     , addScalar
     , addList
     , addAssoc
-    , Context
     )
 
 {-| Url.Interpolate provides a primary entrypoint function, `interpolate`, which takes
@@ -14,6 +14,7 @@ up to Level 4.
 
 @docs interpolate
 
+@docs Context
 @docs simpleContext
 @docs addScalar
 @docs addList
@@ -83,7 +84,7 @@ addAssoc context key assoc =
 {-| Example URI template interpolation:
 
     interpolate "<http://example.com/{path}{?x,y,empty}"> <|
-    simpleContext [("path", "hello"), ("x", "1024"), ("y", "768")]
+      simpleContext [("path", "hello"), ("x", "1024"), ("y", "768")]
 
     -- "<http://example.com/hello?x=1024&y=768&empty=">
 
