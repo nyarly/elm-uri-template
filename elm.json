@@ -1,9 +1,9 @@
 {
   "type": "package",
-  "name": "ericgj/elm-uri-template",
+  "name": "nyarly/elm-uri-template",
   "summary": "Inject values from a Dict into a URI template",
   "license": "MIT",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "exposed-modules": [
     "Url.Interpolate"
   ],
