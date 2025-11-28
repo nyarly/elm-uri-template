@@ -151,20 +151,20 @@ expand operator vars replacements =
 
 expandSimple : List ( String, Modifier ) -> Context -> String
 expandSimple vars replacements =
-    unpackContext percentEncodeValue vars replacements
+    unpackContext percentEncode vars replacements
         |> separatedBy ","
 
 
 expandReservedString : List ( String, Modifier ) -> Context -> String
 expandReservedString vars replacements =
-    unpackContext percentEncodeValueReserved vars replacements
+    unpackContext percentEncodeReserved vars replacements
         |> separatedBy ","
 
 
 expandFragment : List ( String, Modifier ) -> Context -> String
 expandFragment vars replacements =
     "#"
-        ++ (unpackContext percentEncodeValueReserved vars replacements
+        ++ (unpackContext percentEncodeReserved vars replacements
                 |> separatedBy ","
            )
 
@@ -172,7 +172,7 @@ expandFragment vars replacements =
 expandLabel : List ( String, Modifier ) -> Context -> String
 expandLabel vars replacements =
     "."
-        ++ (unpackContext percentEncodeValue vars replacements
+        ++ (unpackContext percentEncode vars replacements
                 |> separatedBy "."
            )
 
@@ -180,61 +180,91 @@ expandLabel vars replacements =
 expandPath : List ( String, Modifier ) -> Context -> String
 expandPath vars replacements =
     "/"
-        ++ (unpackContext percentEncodeValue vars replacements
+        ++ (unpackContext percentEncode vars replacements
                 |> separatedBy "/"
            )
 
 
 expandPathParam : List ( String, Modifier ) -> Context -> String
 expandPathParam vars replacements =
-    unpackContext percentEncodeValue vars replacements
+    unpackQueryContext percentEncode vars replacements
         |> expandPathParamHelp
 
 
 expandQuery : List ( String, Modifier ) -> Context -> String
 expandQuery vars replacements =
-    unpackContext percentEncodeValue vars replacements
+    unpackQueryContext percentEncode vars replacements
         |> expandQueryHelp "?"
 
 
 expandQueryContinuation : List ( String, Modifier ) -> Context -> String
 expandQueryContinuation vars replacements =
-    unpackContext percentEncodeValue vars replacements
+    unpackQueryContext percentEncode vars replacements
         |> expandQueryHelp "&"
 
 
-addUnpacked : Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
-addUnpacked context ( var, mod ) l =
+addUnpacked : (String -> String) -> Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
+addUnpacked encoding context ( var, mod ) l =
     case ( mod, Dict.get var context ) of
         ( Prefix pre, Just (Scalar s) ) ->
-            ( var, String.left pre s ) :: l
+            ( var, encoding (String.left pre s) ) :: l
 
         ( _, Just (Scalar s) ) ->
-            ( var, s ) :: l
+            ( var, encoding s ) :: l
 
         ( Explode, Just (Multi ss) ) ->
-            List.map (\s -> ( var, s )) ss ++ l
+            List.map (\s -> ( var, encoding s )) ss ++ l
 
         ( _, Just (Multi ss) ) ->
-            ( var, String.join "," ss ) :: l
+            ( var, String.join "," (List.map encoding ss) ) :: l
 
         ( Explode, Just (Assoc d) ) ->
-            Dict.toList d ++ l
+            List.map (\( k, v ) -> ( var, String.join "=" [ k, encoding v ] )) (Dict.toList d) ++ l
 
+        {-
+           ( Explode, Just (Assoc d) ) ->
+               (Dict.toList d |> List.map (Tuple.mapSecond encoding)) ++ l
+        -}
         ( _, Just (Assoc d) ) ->
-            List.map (\( k, v ) -> ( var, String.join "=" [ k, v ] )) (Dict.toList d) ++ l
+            ( var, String.join "," (List.foldr (\( k, v ) -> \a -> k :: encoding v :: a) [] (Dict.toList d)) ) :: l
 
         ( _, Nothing ) ->
             ( var, "" ) :: l
 
 
-unpackContext : (Value -> Value) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
+unpackContext : (String -> String) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
 unpackContext encoding vars context =
-    let
-        encode _ =
-            encoding
-    in
-    List.foldr (addUnpacked (Debug.log "context" (Dict.map encode context))) [] (Debug.log "vars" vars)
+    List.foldr (addUnpacked encoding (Debug.log "context" context)) [] (Debug.log "vars" vars)
+
+
+addUnpackedQuery : (String -> String) -> Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
+addUnpackedQuery encoding context ( var, mod ) l =
+    case ( mod, Dict.get var context ) of
+        ( Prefix pre, Just (Scalar s) ) ->
+            ( var, encoding (String.left pre s) ) :: l
+
+        ( _, Just (Scalar s) ) ->
+            ( var, encoding s ) :: l
+
+        ( Explode, Just (Multi ss) ) ->
+            List.map (\s -> ( var, encoding s )) ss ++ l
+
+        ( _, Just (Multi ss) ) ->
+            ( var, String.join "," (List.map encoding ss) ) :: l
+
+        ( Explode, Just (Assoc d) ) ->
+            (Dict.toList d |> List.map (Tuple.mapSecond encoding)) ++ l
+
+        ( _, Just (Assoc d) ) ->
+            ( var, String.join "," (List.foldr (\( k, v ) -> \a -> k :: encoding v :: a) [] (Dict.toList d)) ) :: l
+
+        ( _, Nothing ) ->
+            ( var, "" ) :: l
+
+
+unpackQueryContext : (String -> String) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
+unpackQueryContext encoding vars context =
+    List.foldr (addUnpackedQuery encoding (Debug.log "context" context)) [] (Debug.log "vars" vars)
 
 
 
@@ -260,7 +290,7 @@ expandPathParamHelp pairs =
 expandQueryHelp : String -> List ( String, String ) -> String
 expandQueryHelp prefix pairs =
     prefix
-        ++ (pairs
+        ++ (Debug.log "pair" pairs
                 |> List.map (\( var, val ) -> var ++ "=" ++ val)
                 |> String.join "&"
            )
@@ -355,31 +385,14 @@ reservedChars =
         [ ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' ]
 
 
-percentEncodeValue : Value -> Value
-percentEncodeValue =
-    percentEncodeValueExcept unreservedChars
+percentEncode : String -> String
+percentEncode =
+    percentEncodeExcept unreservedChars
 
 
-percentEncodeValueReserved : Value -> Value
-percentEncodeValueReserved =
-    percentEncodeValueExcept reservedAndUnreserved
-
-
-percentEncodeValueExcept : Set Char -> Value -> Value
-percentEncodeValueExcept chars val =
-    case val of
-        Scalar s ->
-            Scalar (percentEncodeExcept chars s)
-
-        Multi l ->
-            Multi (List.map (percentEncodeExcept chars) l)
-
-        Assoc d ->
-            let
-                encode _ =
-                    percentEncodeExcept chars
-            in
-            Assoc (Dict.map encode d)
+percentEncodeReserved : String -> String
+percentEncodeReserved =
+    percentEncodeExcept reservedAndUnreserved
 
 
 reservedAndUnreserved : Set Char
