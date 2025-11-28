@@ -203,8 +203,12 @@ expandQueryContinuation vars replacements =
         |> expandQueryHelp "&"
 
 
-addUnpacked : (String -> String) -> Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
-addUnpacked encoding context ( var, mod ) l =
+type alias AssocExploder =
+    (String -> String) -> String -> Dict String String -> List ( String, String )
+
+
+addUnpacked : (String -> String) -> AssocExploder -> Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
+addUnpacked encoding assocExplode context ( var, mod ) l =
     case ( mod, Dict.get var context ) of
         ( Prefix pre, Just (Scalar s) ) ->
             ( var, encoding (String.left pre s) ) :: l
@@ -219,52 +223,33 @@ addUnpacked encoding context ( var, mod ) l =
             ( var, String.join "," (List.map encoding ss) ) :: l
 
         ( Explode, Just (Assoc d) ) ->
-            List.map (\( k, v ) -> ( var, String.join "=" [ k, encoding v ] )) (Dict.toList d) ++ l
+            assocExplode encoding var d ++ l
 
-        {-
-           ( Explode, Just (Assoc d) ) ->
-               (Dict.toList d |> List.map (Tuple.mapSecond encoding)) ++ l
-        -}
         ( _, Just (Assoc d) ) ->
             ( var, String.join "," (List.foldr (\( k, v ) -> \a -> k :: encoding v :: a) [] (Dict.toList d)) ) :: l
 
         ( _, Nothing ) ->
             ( var, "" ) :: l
+
+
+explodeAssoc : AssocExploder
+explodeAssoc encoding var d =
+    List.map (\( k, v ) -> ( var, String.join "=" [ k, encoding v ] )) (Dict.toList d)
+
+
+explodeAssocForQuery : AssocExploder
+explodeAssocForQuery encoding _ d =
+    Dict.toList d |> List.map (Tuple.mapSecond encoding)
 
 
 unpackContext : (String -> String) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
 unpackContext encoding vars context =
-    List.foldr (addUnpacked encoding (Debug.log "context" context)) [] (Debug.log "vars" vars)
-
-
-addUnpackedQuery : (String -> String) -> Dict String Value -> ( String, Modifier ) -> List ( String, String ) -> List ( String, String )
-addUnpackedQuery encoding context ( var, mod ) l =
-    case ( mod, Dict.get var context ) of
-        ( Prefix pre, Just (Scalar s) ) ->
-            ( var, encoding (String.left pre s) ) :: l
-
-        ( _, Just (Scalar s) ) ->
-            ( var, encoding s ) :: l
-
-        ( Explode, Just (Multi ss) ) ->
-            List.map (\s -> ( var, encoding s )) ss ++ l
-
-        ( _, Just (Multi ss) ) ->
-            ( var, String.join "," (List.map encoding ss) ) :: l
-
-        ( Explode, Just (Assoc d) ) ->
-            (Dict.toList d |> List.map (Tuple.mapSecond encoding)) ++ l
-
-        ( _, Just (Assoc d) ) ->
-            ( var, String.join "," (List.foldr (\( k, v ) -> \a -> k :: encoding v :: a) [] (Dict.toList d)) ) :: l
-
-        ( _, Nothing ) ->
-            ( var, "" ) :: l
+    List.foldr (addUnpacked encoding explodeAssoc context) [] vars
 
 
 unpackQueryContext : (String -> String) -> List ( String, Modifier ) -> Dict String Value -> List ( String, String )
 unpackQueryContext encoding vars context =
-    List.foldr (addUnpackedQuery encoding (Debug.log "context" context)) [] (Debug.log "vars" vars)
+    List.foldr (addUnpacked encoding explodeAssocForQuery context) [] vars
 
 
 
@@ -290,7 +275,7 @@ expandPathParamHelp pairs =
 expandQueryHelp : String -> List ( String, String ) -> String
 expandQueryHelp prefix pairs =
     prefix
-        ++ (Debug.log "pair" pairs
+        ++ (pairs
                 |> List.map (\( var, val ) -> var ++ "=" ++ val)
                 |> String.join "&"
            )
